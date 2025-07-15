@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>AI Voice Sync</title>
+    <style>
+        :root {
+            --primary: hsl(200, 100%, 50%);
+            --primary-light: hsla(200, 100%, 60%, 0.4);
+            --dark-bg: #000;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: var(--dark-bg);
+            font-family: 'Arial', sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+
+        #visualizer {
+            width: 300px;
+            height: 300px;
+            position: relative;
+            margin-bottom: 30px;
+        }
+
+        #voiceCircle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid var(--primary);
+            box-shadow: 0 0 30px var(--primary-light);
+            transition: all 0.05s ease-out;
+            will-change: transform, box-shadow, border-color;
+        }
+
+        #audioWave {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            opacity: 0;
+            pointer-events: none;
+            border: 1px solid var(--primary);
+        }
+
+        #status {
+            margin-top: 20px;
+            color: var(--primary);
+            width: 80vw;
+            max-width: 600px;
+            text-align: center;
+            font-weight: 300;
+            text-shadow: 0 0 10px var(--primary-light);
+            user-select: none;
+
+            display: -webkit-box;
+            -webkit-line-clamp: 1;         /* Limite à 1 ligne */
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+
+            max-height: 1.2em;              /* Hauteur max = 1 ligne */
+            line-height: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div id="visualizer">
+        <div id="voiceCircle"></div>
+        <div id="audioWave"></div>
+    </div>
+    <div id="status">Initializing voice sync...</div>
+
+    <script>
+        // DOM Elements
+        const voiceCircle = document.getElementById('voiceCircle');
+        const statusEl = document.getElementById('status');
+        const audioWave = document.getElementById('audioWave');
+
+        // Audio Analysis
+        let audioContext;
+        let analyser;
+        let processor;
+        let dataArray;
+        let isSpeaking = false;
+        let isSystemSpeaking = false;
+        let recognition;
+        let animationId;
+        let smoothVolume = 0;
+        let lastVolumeTime = 0;
+        let lastUserSpeechTime = 0;
+        let cooldownTimer;
+
+        // Initialize
+        async function init() {
+            try {
+                await setupAudio();
+                setupVoiceRecognition();
+                statusEl.textContent = "Ready - Speak now";
+            } catch (error) {
+                statusEl.textContent = "Error: " + error.message;
+                setTimeout(init, 2000);
+            }
+        }
+
+        // Audio Setup with ScriptProcessor for real-time analysis
+        async function setupAudio() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 64;
+
+            // Create script processor for real-time processing
+            processor = audioContext.createScriptProcessor(2048, 1, 1);
+            processor.connect(audioContext.destination);
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+            analyser.connect(processor);
+
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            // Real-time audio processing
+            processor.onaudioprocess = () => {
+                analyser.getByteFrequencyData(dataArray);
+                const volume = getVolume();
+                updateVisuals(volume);
+            };
+        }
+
+        // Calculate volume from frequency data
+        function getVolume() {
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            return sum / dataArray.length / 255;
+        }
+
+        // Update visuals based on volume
+        function updateVisuals(volume) {
+            const now = Date.now();
+            
+            // Smooth volume changes
+            smoothVolume = smoothVolume * 0.7 + volume * 0.3;
+            
+            // Dynamic effects only when speaking
+            if (!isSpeaking) return;
+
+            // Base animation
+            const scale = 1 + smoothVolume * 0.3;
+            const borderWidth = 2 + smoothVolume * 5;
+            const glowIntensity = smoothVolume * 50;
+            
+            voiceCircle.style.transform = `translate(-50%, -50%) scale(${scale})`;
+            voiceCircle.style.borderWidth = `${borderWidth}px`;
+            voiceCircle.style.boxShadow = `0 0 ${glowIntensity}px var(--primary-light)`;
+            
+            // Create wave effect on significant volume peaks
+            if (volume > smoothVolume * 1.5 && now - lastVolumeTime > 100) {
+                createWaveEffect(volume);
+                lastVolumeTime = now;
+            }
+        }
+
+        // Create wave propagation effect
+        function createWaveEffect(intensity) {
+            audioWave.style.borderColor = `hsl(200, 100%, ${50 + intensity * 50}%)`;
+            audioWave.style.opacity = '0.8';
+            audioWave.style.transform = 'translate(-50%, -50%) scale(1)';
+            
+            setTimeout(() => {
+                audioWave.style.transition = 'all 0.6s ease-out';
+                audioWave.style.opacity = '0';
+                audioWave.style.transform = 'translate(-50%, -50%) scale(1.5)';
+            }, 10);
+            
+            setTimeout(() => {
+                audioWave.style.transition = 'none';
+            }, 700);
+        }
+
+        // Voice Recognition
+        function setupVoiceRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                throw new Error("Speech Recognition not supported");
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true; // Activer les résultats intermédiaires
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => {
+                if (!isSpeaking) {
+                    statusEl.textContent = "Listening...";
+                }
+            };
+
+            recognition.onresult = async (event) => {
+                // Ignorer si le système parle ou si c'est un résultat intermédiaire
+                if (isSystemSpeaking || event.results[event.results.length - 1].isFinal === false) {
+                    return;
+                }
+
+                const transcript = event.results[event.results.length - 1][0].transcript.trim();
+                if (!transcript) return;
+
+                // Vérifier si c'est une vraie demande utilisateur
+                const now = Date.now();
+                if (now - lastUserSpeechTime < 1000) {
+                    return; // Ignorer les demandes trop rapprochées
+                }
+
+                lastUserSpeechTime = now;
+                statusEl.textContent = "Processing: " + transcript;
+
+                try {
+                    const response = await fetchAIResponse(transcript);
+                    speak(response);
+                } catch (error) {
+                    console.error("API error:", error);
+                    speak("Sorry, I encountered an error.");
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.error("Recognition error:", event.error);
+                setTimeout(() => recognition.start(), 1000);
+            };
+
+            recognition.onend = () => {
+                if (!isSpeaking && !isSystemSpeaking) {
+                    // Démarrer après un court délai pour éviter les boucles
+                    setTimeout(() => recognition.start(), 500);
+                }
+            };
+
+            recognition.start();
+        }
+
+        // AI Response
+        async function fetchAIResponse(prompt) {
+            const response = await fetch('https://gemini-proxy.med1990777.workers.dev/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt, lang: 'en' })
+            });
+            const data = await response.json();
+            return data.reply || "I didn't get a response.";
+        }
+
+        // Text-to-Speech with real-time analysis
+        function speak(text) {
+            if (!text || isSpeaking) return;
+
+            isSpeaking = true;
+            isSystemSpeaking = true;
+            statusEl.textContent = "AI: " + text;
+
+            // Annuler tout cooldown en cours
+            if (cooldownTimer) {
+                clearTimeout(cooldownTimer);
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+
+            // Fonction pour choisir une voix féminine anglaise
+            function selectFemaleEnglishVoice() {
+                const voices = speechSynthesis.getVoices();
+
+                // 1. Voix anglaise américaine contenant "female" ou "woman"
+                let voice = voices.find(v => 
+                    v.lang === 'en-US' && 
+                    (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('woman'))
+                );
+
+                // 2. Sinon, toute voix anglaise américaine
+                if (!voice) {
+                    voice = voices.find(v => v.lang === 'en-US');
+                }
+
+                // 3. Sinon, n'importe quelle voix anglaise
+                if (!voice) {
+                    voice = voices.find(v => v.lang.startsWith('en'));
+                }
+
+                return voice;
+            }
+
+            // Attendre le chargement des voix si nécessaire
+            function speakWithVoice() {
+                const selectedVoice = selectFemaleEnglishVoice();
+                if (selectedVoice) {
+                    utterance.voice = selectedVoice;
+                    utterance.lang = selectedVoice.lang;
+                } else {
+                    console.warn("Aucune voix anglaise trouvée. Utilisation de la voix par défaut.");
+                }
+
+                // Réglages de la voix
+                utterance.rate = 1.0;
+                utterance.pitch = 1.1;
+                utterance.volume = 1.0;
+
+                // Lancer la synthèse vocale
+                speechSynthesis.speak(utterance);
+            }
+
+            // Set voice properties for more natural sound
+            utterance.rate = 1.0;
+            utterance.pitch = 1.1;
+            utterance.volume = 1.0;
+
+            // Create new audio context for TTS analysis
+            const ttsContext = new (window.AudioContext || window.webkitAudioContext)();
+            const ttsAnalyser = ttsContext.createAnalyser();
+            ttsAnalyser.fftSize = 64;
+            
+            const ttsProcessor = ttsContext.createScriptProcessor(2048, 1, 1);
+            ttsProcessor.connect(ttsContext.destination);
+            
+            utterance.onboundary = (event) => {
+                if (event.name === 'word') {
+                    createWaveEffect(0.5);
+                }
+            };
+
+            utterance.onend = () => {
+                isSpeaking = false;
+                
+                // Activer un cooldown de 1.5 secondes après avoir fini de parler
+                cooldownTimer = setTimeout(() => {
+                    isSystemSpeaking = false;
+                    statusEl.textContent = "Listening...";
+                    recognition.start();
+                }, 1500);
+                
+                ttsContext.close();
+            };
+
+            // Chrome requires this workaround for TTS analysis
+            const audio = new Audio();
+            audio.src = URL.createObjectURL(new Blob([
+                new Uint8Array([82, 73, 70, 70, 40, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0, 1, 0, 1, 0, 68, 172, 0, 0, 136, 88, 1, 0, 2, 0, 16, 0, 100, 97, 116, 97, 4, 0, 0, 0, 0, 0, 0, 0])
+            ], { type: 'audio/wav' }));
+            
+            const source = ttsContext.createMediaElementSource(audio);
+            source.connect(ttsAnalyser);
+            ttsAnalyser.connect(ttsProcessor);
+            
+            ttsProcessor.onaudioprocess = () => {
+                const ttsData = new Uint8Array(ttsAnalyser.frequencyBinCount);
+                ttsAnalyser.getByteFrequencyData(ttsData);
+                const volume = Math.max(...ttsData) / 255;
+                updateVisuals(volume);
+            };
+
+            // Si les voix ne sont pas encore disponibles, attendre
+            if (speechSynthesis.getVoices().length === 0) {
+                speechSynthesis.onvoiceschanged = speakWithVoice;
+            } else {
+                speakWithVoice();
+            }
+        }
+
+        // Start
+        init();
+    </script>
+</body>
+</html>
