@@ -1,3 +1,7 @@
-# AI-voice-0.1
-
-https://kurama-90.github.io/AI-voice-0.1/
+graph LR
+    A[User Voice Input] --> B[Browser]
+    B --> C[Cloudflare Worker]
+    C --> D[Gemini AI]
+    D --> C
+    C --> B
+    B --> E[Voice Response]
