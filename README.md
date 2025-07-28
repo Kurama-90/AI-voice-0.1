@@ -1,7 +1,8 @@
-graph LR
-    A[User Voice Input] --> B[Browser]
+
+## Architecture
+```mermaid
+graph TD
+    A[User Voice] --> B[Browser]
     B --> C[Cloudflare Worker]
     C --> D[Gemini AI]
-    D --> C
-    C --> B
-    B --> E[Voice Response]
+    D --> C --> B --> E[Voice Response]
